@@ -22,9 +22,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
+import pydicom
 from rdflib import Graph, Literal, Namespace, URIRef
 from rdflib.namespace import RDF, RDFS, XSD, OWL, SKOS
+from pydicom.dataset import Dataset, FileDataset
+from pydicom.uid import ExplicitVRLittleEndian, SecondaryCaptureImageStorage
 
 
 # -----------------------------
@@ -32,6 +36,11 @@ from rdflib.namespace import RDF, RDFS, XSD, OWL, SKOS
 # -----------------------------
 def sha256_pseudo(value: str, keep: int = 16) -> str:
     return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:keep]
+
+
+def deterministic_uid(seed: str) -> str:
+    num = int(hashlib.sha256(seed.encode("utf-8")).hexdigest(), 16)
+    return f"1.2.826.0.1.3680043.10.543.{num % 10**18}"
 
 
 def ensure_dir(p: Path) -> None:
@@ -89,6 +98,7 @@ class EHDSDataPreparation:
         ensure_dir(self.data_dir / "source_ehr_csv")
         ensure_dir(self.data_dir / "source_lab_json")
         ensure_dir(self.data_dir / "source_fhir_ndjson")
+        ensure_dir(self.data_dir / "source_dicom")
         ensure_dir(self.data_dir / "integrated")
         ensure_dir(self.data_dir / "rdf")
 
@@ -231,6 +241,61 @@ class EHDSDataPreparation:
         print(f"OK Generated FHIR-like NDJSON: {out}")
         return out
 
+    def generate_dicom_series(self, n_patients: int = 120, n_studies: int = 150) -> Path:
+        base = self.data_dir / "source_dicom"
+        ensure_dir(base)
+
+        modalities = ["CT", "MR"]
+        body_parts = ["HEAD", "CHEST", "ABDOMEN", "KNEE", "SPINE"]
+        rng = np.random.default_rng(self.seed)
+
+        for study_idx in range(1, n_studies + 1):
+            pid = f"P{random.randint(1, n_patients):04d}"
+            study_uid = deterministic_uid(f"study-{study_idx}-{pid}")
+            series_uid = deterministic_uid(f"series-{study_idx}-{pid}")
+            study_date = (datetime.now() - timedelta(days=random.randint(0, 365))).strftime("%Y%m%d")
+            study_dir = base / f"patient_{pid}" / f"study_{study_uid}"
+            ensure_dir(study_dir)
+
+            for instance_idx in range(1, random.randint(1, 3) + 1):
+                sop_uid = deterministic_uid(f"sop-{study_idx}-{instance_idx}-{pid}")
+                modality = random.choice(modalities)
+                rows = 128
+                cols = 128
+                pixel = rng.integers(0, 256, size=(rows, cols), dtype=np.uint8)
+
+                filename = study_dir / f"{sop_uid}.dcm"
+                file_meta = Dataset()
+                file_meta.MediaStorageSOPClassUID = SecondaryCaptureImageStorage
+                file_meta.MediaStorageSOPInstanceUID = sop_uid
+                file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+                file_meta.ImplementationClassUID = deterministic_uid("impl")
+
+                ds = FileDataset(str(filename), {}, file_meta=file_meta, preamble=b"\0" * 128)
+                ds.SOPClassUID = SecondaryCaptureImageStorage
+                ds.PatientID = pid
+                ds.StudyInstanceUID = study_uid
+                ds.SeriesInstanceUID = series_uid
+                ds.SOPInstanceUID = sop_uid
+                ds.Modality = modality
+                ds.StudyDate = study_date
+                ds.BodyPartExamined = random.choice(body_parts)
+                ds.Rows = rows
+                ds.Columns = cols
+                ds.SamplesPerPixel = 1
+                ds.PhotometricInterpretation = "MONOCHROME2"
+                ds.BitsAllocated = 8
+                ds.BitsStored = 8
+                ds.HighBit = 7
+                ds.PixelRepresentation = 0
+                ds.PixelData = pixel.tobytes()
+                ds.is_little_endian = True
+                ds.is_implicit_VR = False
+                ds.save_as(str(filename), write_like_original=False)
+
+        print(f"OK Generated DICOM series: {base}")
+        return base
+
 
 # -----------------------------
 # PART 2: Integration pipeline (ETL -> SQLite)
@@ -321,10 +386,56 @@ class EHDSDataIntegration:
 
         return out
 
+    def load_dicom_metadata(self) -> pd.DataFrame:
+        dicom_dir = self.data_dir / "source_dicom"
+        columns = [
+            "dicom_id",
+            "patient_id",
+            "patient_id_pseudo",
+            "study_uid",
+            "series_uid",
+            "modality",
+            "study_date",
+            "file_path",
+            "rows",
+            "cols",
+        ]
+        if not dicom_dir.exists():
+            return pd.DataFrame(columns=columns)
+
+        rows = []
+        for path in dicom_dir.rglob("*.dcm"):
+            try:
+                ds = pydicom.dcmread(str(path), stop_before_pixels=True)
+            except Exception:
+                continue
+
+            patient_id = getattr(ds, "PatientID", None)
+            rows.append(
+                {
+                    "dicom_id": getattr(ds, "SOPInstanceUID", None),
+                    "patient_id": patient_id,
+                    "patient_id_pseudo": sha256_pseudo(patient_id) if patient_id else None,
+                    "study_uid": getattr(ds, "StudyInstanceUID", None),
+                    "series_uid": getattr(ds, "SeriesInstanceUID", None),
+                    "modality": getattr(ds, "Modality", None),
+                    "study_date": getattr(ds, "StudyDate", None),
+                    "file_path": str(path),
+                    "rows": getattr(ds, "Rows", None),
+                    "cols": getattr(ds, "Columns", None),
+                }
+            )
+
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return pd.DataFrame(columns=columns)
+        return df
+
     def integrate(self) -> Dict[str, pd.DataFrame]:
         ehr = self.load_ehr_csv()
         lab = self.load_lab_json()
         fhir = self.load_fhir_ndjson()
+        dicom_images = self.load_dicom_metadata()
 
         # unify patient table
         patients = ehr.merge(
@@ -365,6 +476,7 @@ class EHDSDataIntegration:
             "conditions": conditions,
             "allergies": allergies,
             "prescriptions": prescriptions,
+            "dicom_images": dicom_images,
         }
 
     def export_to_sqlite(self, tables: Dict[str, pd.DataFrame], db_path: Path) -> None:
@@ -397,7 +509,18 @@ class EHDSSemanticLayer:
         self.g.add((ont, RDFS.label, Literal("EHDS Mini Ontology")))
 
         # Classes
-        for cls in ["Patient", "LabResult", "Test", "Condition", "Drug", "DrugFamily", "Allergy", "Alert"]:
+        for cls in [
+            "Patient",
+            "LabResult",
+            "Test",
+            "Condition",
+            "Drug",
+            "DrugFamily",
+            "Allergy",
+            "Alert",
+            "ImagingStudy",
+            "DicomInstance",
+        ]:
             self.g.add((self.EHDS[cls], RDF.type, OWL.Class))
 
         # Properties
@@ -407,6 +530,8 @@ class EHDSSemanticLayer:
             ("hasCondition", OWL.ObjectProperty),
             ("hasAllergy", OWL.ObjectProperty),
             ("hasPrescription", OWL.ObjectProperty),
+            ("hasImagingStudy", OWL.ObjectProperty),
+            ("hasDicomInstance", OWL.ObjectProperty),
             ("drug", OWL.ObjectProperty),
             ("belongsToFamily", OWL.ObjectProperty),
             ("affectsFamily", OWL.ObjectProperty),
@@ -417,6 +542,11 @@ class EHDSSemanticLayer:
             ("icd10Code", OWL.DatatypeProperty),
             ("label", OWL.DatatypeProperty),
             ("date", OWL.DatatypeProperty),
+            ("modality", OWL.DatatypeProperty),
+            ("studyUID", OWL.DatatypeProperty),
+            ("seriesUID", OWL.DatatypeProperty),
+            ("sopUID", OWL.DatatypeProperty),
+            ("filePath", OWL.DatatypeProperty),
         ]
         for p, t in props:
             self.g.add((self.EHDS[p], RDF.type, t))
@@ -464,6 +594,7 @@ class EHDSSemanticLayer:
         conditions: pd.DataFrame,
         allergies: pd.DataFrame,
         prescriptions: pd.DataFrame,
+        dicom_images: pd.DataFrame,
         sample_labs: int = 200,
     ) -> None:
         self.add_reference_concepts()
@@ -473,6 +604,43 @@ class EHDSSemanticLayer:
             p = self.RES[f"patient/{r['patient_id_pseudo']}"]
             self.g.add((p, RDF.type, self.EHDS.Patient))
             self.g.add((p, self.EHDS.label, Literal(f"{r.get('first_name','')} {r.get('last_name','')}".strip())))
+
+        # DICOM imaging (study + instance)
+        if not dicom_images.empty:
+            for _, r in dicom_images.iterrows():
+                patient_pseudo = r.get("patient_id_pseudo")
+                study_uid = r.get("study_uid")
+                sop_uid = r.get("dicom_id")
+                if not patient_pseudo or not study_uid or not sop_uid:
+                    continue
+                p = self.RES[f"patient/{patient_pseudo}"]
+                if (p, RDF.type, self.EHDS.Patient) not in self.g:
+                    self.g.add((p, RDF.type, self.EHDS.Patient))
+
+                study_uid = str(study_uid)
+                study_uri = self.RES[f"imagingstudy/{study_uid}"]
+                self.g.add((study_uri, RDF.type, self.EHDS.ImagingStudy))
+                self.g.add((study_uri, self.EHDS.studyUID, Literal(study_uid)))
+                study_date = r.get("study_date")
+                if study_date:
+                    if isinstance(study_date, str) and len(study_date) == 8:
+                        study_date = f"{study_date[0:4]}-{study_date[4:6]}-{study_date[6:8]}"
+                    self.g.add((study_uri, self.EHDS.date, Literal(study_date, datatype=XSD.date)))
+                self.g.add((p, self.EHDS.hasImagingStudy, study_uri))
+
+                inst_uid = str(sop_uid)
+                inst_uri = self.RES[f"dicom/{inst_uid}"]
+                self.g.add((inst_uri, RDF.type, self.EHDS.DicomInstance))
+                self.g.add((inst_uri, self.EHDS.hasPatient, p))
+                if r.get("series_uid"):
+                    self.g.add((inst_uri, self.EHDS.seriesUID, Literal(str(r["series_uid"]))))
+                if r.get("dicom_id"):
+                    self.g.add((inst_uri, self.EHDS.sopUID, Literal(str(r["dicom_id"]))))
+                if r.get("modality"):
+                    self.g.add((inst_uri, self.EHDS.modality, Literal(r["modality"])))
+                if r.get("file_path"):
+                    self.g.add((inst_uri, self.EHDS.filePath, Literal(r["file_path"])))
+                self.g.add((study_uri, self.EHDS.hasDicomInstance, inst_uri))
 
         # Conditions (ICD-10)
         for _, r in conditions.iterrows():
@@ -562,6 +730,30 @@ class EHDSSemanticLayer:
                 ORDER BY DESC(?val)
                 LIMIT 10
             """,
+            "Count DICOM instances per modality": """
+                PREFIX ehds: <http://ehds.eu/ontology#>
+                SELECT ?modality (COUNT(?dicom) AS ?count)
+                WHERE {
+                    ?dicom a ehds:DicomInstance ;
+                           ehds:modality ?modality .
+                }
+                GROUP BY ?modality
+                ORDER BY DESC(?count)
+            """,
+            "Patients with imaging + abnormal glucose": """
+                PREFIX ehds: <http://ehds.eu/ontology#>
+                SELECT DISTINCT ?patient ?val ?study
+                WHERE {
+                    ?patient a ehds:Patient ;
+                             ehds:hasImagingStudy ?study .
+                    ?lab a ehds:LabResult ;
+                         ehds:hasPatient ?patient ;
+                         ehds:label "Glucose" ;
+                         ehds:value ?val .
+                    FILTER (?val > 140)
+                }
+                LIMIT 20
+            """,
             "Contraindication alerts (allergy <-> drug family)": """
                 PREFIX ehds: <http://ehds.eu/ontology#>
                 SELECT ?patient ?allergyLabel ?drugLabel ?family
@@ -595,6 +787,7 @@ def run_all(data_dir: Path, n_patients: int, n_labs: int) -> None:
     prep.generate_ehr_patients_csv(n_patients=n_patients)
     prep.generate_lab_results_json(n_records=n_labs, n_patients=n_patients)
     prep.generate_fhir_like_ndjson(n_patients=n_patients)
+    prep.generate_dicom_series(n_patients=n_patients, n_studies=150)
 
     integrator = EHDSDataIntegration(data_dir=data_dir)
     tables = integrator.integrate()
@@ -608,6 +801,7 @@ def run_all(data_dir: Path, n_patients: int, n_labs: int) -> None:
         conditions=tables["conditions"],
         allergies=tables["allergies"],
         prescriptions=tables["prescriptions"],
+        dicom_images=tables["dicom_images"],
         sample_labs=min(200, len(tables["lab_results"])),
     )
     semantic.save("ehds_data.ttl")
