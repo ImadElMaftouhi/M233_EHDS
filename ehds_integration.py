@@ -112,7 +112,7 @@ class EHDSDataPreparation:
         df = pd.DataFrame(rows)
         out = self.data_dir / "source_ehr_csv" / "ehr_patients.csv"
         df.to_csv(out, index=False)
-        print(f"✓ Generated EHR patients CSV: {out} ({len(df)} rows)")
+        print(f"OK Generated EHR patients CSV: {out} ({len(df)} rows)")
         return out
 
     def generate_lab_results_json(self, n_records: int = 600, n_patients: int = 120) -> Path:
@@ -150,7 +150,7 @@ class EHDSDataPreparation:
         out = self.data_dir / "source_lab_json" / "lab_results.json"
         with open(out, "w", encoding="utf-8") as f:
             json.dump(labs, f, indent=2, ensure_ascii=False)
-        print(f"✓ Generated Lab JSON: {out} ({len(labs)} rows)")
+        print(f"OK Generated Lab JSON: {out} ({len(labs)} rows)")
         return out
 
     def generate_fhir_like_ndjson(self, n_patients: int = 120) -> Path:
@@ -228,7 +228,7 @@ class EHDSDataPreparation:
                         + "\n"
                     )
 
-        print(f"✓ Generated FHIR-like NDJSON: {out}")
+        print(f"OK Generated FHIR-like NDJSON: {out}")
         return out
 
 
@@ -373,7 +373,7 @@ class EHDSDataIntegration:
         for name, df in tables.items():
             df.to_sql(name, conn, if_exists="replace", index=False)
         conn.close()
-        print(f"✓ Exported integrated DB: {db_path}")
+        print(f"OK Exported integrated DB: {db_path}")
 
 
 # -----------------------------
@@ -531,12 +531,12 @@ class EHDSSemanticLayer:
             self.g.add((test_uri, RDF.type, self.EHDS.Test))
             self.g.add((lr, self.EHDS.hasTest, test_uri))
 
-        print(f"✓ RDF graph built: {len(self.g)} triples")
+        print(f"OK RDF graph built: {len(self.g)} triples")
 
     def save(self, filename: str = "ehds_data.ttl") -> Path:
         out = self.data_dir / "rdf" / filename
         self.g.serialize(destination=str(out), format="turtle")
-        print(f"✓ Saved TTL: {out}")
+        print(f"OK Saved TTL: {out}")
         return out
 
     def run_predefined_queries(self) -> Dict[str, list]:
@@ -562,7 +562,7 @@ class EHDSSemanticLayer:
                 ORDER BY DESC(?val)
                 LIMIT 10
             """,
-            "Contraindication alerts (allergy ↔ drug family)": """
+            "Contraindication alerts (allergy <-> drug family)": """
                 PREFIX ehds: <http://ehds.eu/ontology#>
                 SELECT ?patient ?allergyLabel ?drugLabel ?family
                 WHERE {
@@ -583,7 +583,7 @@ class EHDSSemanticLayer:
         for name, q in queries.items():
             rows = list(self.g.query(q))
             results[name] = rows
-            print(f"\n📌 {name}: {len(rows)} rows")
+            print(f"\n[Query] {name}: {len(rows)} rows")
         return results
 
 
