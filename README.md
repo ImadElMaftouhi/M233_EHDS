@@ -311,9 +311,9 @@ After running the pipeline, you'll find:
   - `catalog.ttl`: RDF catalog with PROV-O lineage
   - `ehds_data_graph.ttl`: RDF data graph with all entities
 
-### Integrated Database
+### Integrated Database (Optional Convenience Layer)
 
-- **SQLite** (`data/integrated/ehds.db`): Unified relational database with tables:
+- **SQLite** (`data/integrated/ehds.db`): **Optional** relational view for dashboard/querying. Not part of core Data Lake architecture (Bronze/Silver/Gold use Parquet). Contains tables:
   - `patients`
   - `lab_results`
   - `conditions`
