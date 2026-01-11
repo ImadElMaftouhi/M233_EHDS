@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List
+from urllib.parse import quote
 
 import pandas as pd
 from rdflib import Graph, Literal, Namespace, URIRef
@@ -193,7 +194,9 @@ class RDFLayer:
         # Drugs + prescriptions
         for _, r in prescriptions.iterrows():
             p = self.RES[f"patient/{r['patient_id_pseudo']}"]
-            drug_uri = self.RES[f"drug/{r['drug'].replace(' ', '_')}"]
+            # URL-encode drug name to handle special characters (parentheses, brackets, slashes, etc.)
+            drug_name_encoded = quote(str(r['drug']), safe='')
+            drug_uri = self.RES[f"drug/{drug_name_encoded}"]
             self.g.add((drug_uri, RDF.type, EHDS.Drug))
             self.g.add((drug_uri, EHDS.label, Literal(r["drug"])))
 
