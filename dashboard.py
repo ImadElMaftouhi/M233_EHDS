@@ -315,9 +315,26 @@ elif page == "Data Sources":
         p = DATA_DIR / "source_fhir_ndjson" / "bundle.ndjson"
         st.write(str(p))
         if p.exists():
-            # Show first lines only
-            lines = p.read_text(encoding="utf-8").splitlines()[:10]
-            st.code("\n".join(lines), language="json")
+            # Show first lines only - handle encoding errors gracefully
+            try:
+                # Try multiple encodings
+                encodings = ["utf-8", "latin-1", "cp1252", "iso-8859-1"]
+                lines = None
+                for encoding in encodings:
+                    try:
+                        lines = p.read_text(encoding=encoding).splitlines()[:10]
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                
+                # If all encodings failed, use replace strategy
+                if lines is None:
+                    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()[:10]
+                    st.warning("⚠️ File contains invalid UTF-8 bytes. Displaying with replacement characters.")
+                
+                st.code("\n".join(lines), language="json")
+            except Exception as e:
+                st.error(f"Error reading file: {e}")
     with col4:
         st.markdown("**Source 4 - DICOM**")
         dicom_dir = DATA_DIR / "source_dicom"
@@ -434,8 +451,25 @@ elif page == "Semantic Graph":
         st.metric("Triples", len(g))
 
         st.subheader("Preview TTL")
-        ttl_text = TTL_PATH.read_text(encoding="utf-8").splitlines()[:80]
-        st.code("\n".join(ttl_text), language="turtle")
+        try:
+            # Try multiple encodings for TTL file
+            encodings = ["utf-8", "latin-1", "cp1252", "iso-8859-1"]
+            ttl_text = None
+            for encoding in encodings:
+                try:
+                    ttl_text = TTL_PATH.read_text(encoding=encoding).splitlines()[:80]
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            # If all encodings failed, use replace strategy
+            if ttl_text is None:
+                ttl_text = TTL_PATH.read_text(encoding="utf-8", errors="replace").splitlines()[:80]
+                st.warning("⚠️ TTL file contains invalid UTF-8 bytes. Displaying with replacement characters.")
+            
+            st.code("\n".join(ttl_text), language="turtle")
+        except Exception as e:
+            st.error(f"Error reading TTL file: {e}")
 
         st.subheader("What’s inside")
         st.markdown(
