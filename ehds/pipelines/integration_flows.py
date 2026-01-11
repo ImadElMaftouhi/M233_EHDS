@@ -98,12 +98,13 @@ class SyntheaFHIRFlow(IntegrationFlow):
         self.n_patients = n_patients
 
     def extract(self) -> Path:
-        """Extract: Utilise données FHIR existantes dans data/bronze/fhir/."""
-        path = self.lake.data_dir / "bronze" / "fhir" / "bundle.ndjson"
+        """Extract: Utilise données FHIR existantes dans data/source_fhir_ndjson/."""
+        path = self.lake.data_dir / "source_fhir_ndjson" / "bundle.ndjson"
         if not path.exists():
             raise FileNotFoundError(
                 f"FHIR data not found at {path}. "
-                "Please copy Synthea FHIR bundle.ndjson to data/bronze/fhir/"
+                "Please copy Synthea FHIR bundle.ndjson to data/source_fhir_ndjson/"
+                "Check the documentation for Synthea Guide"
             )
         return path
 
