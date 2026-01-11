@@ -1,16 +1,85 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
 
 # Environment
 .venv/
+venv/
+ENV/
+env/
+.conda/
 
-# temporary files
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
 *.tmp
 ~$*
-~$*.*
+*.log
+.DS_Store
+Thumbs.db
 
-# data
-data/*
+# Data directories (generated data - users will create their own)
+data/bronze/
+data/silver/
+data/gold/
+data/semantic/
+data/integrated/
+data/rdf/
+data/source_dicom/
+data/source_ehr_csv/
+data/source_fhir_ndjson/
+data/source_lab_json/
+data/source_mimic_csv/
 
-# artifacts
-artifacts/*
+# But keep directory structure for documentation
+!data/.gitkeep
+!data/bronze/.gitkeep
+!data/silver/.gitkeep
+!data/gold/.gitkeep
+!data/semantic/.gitkeep
+!data/integrated/.gitkeep
+!data/rdf/.gitkeep
+
+# Artifacts (test outputs)
+artifacts/__pycache__/
+artifacts/*.pyc
+artifacts/*.csv
+artifacts/*.json
+artifacts/*.db
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Documentation build
+docs/_build/
+docs/.doctrees/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# Large binary files (keep sources/ for reference docs)
+*.dcm
+*.dicom
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3

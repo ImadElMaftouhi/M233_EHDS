@@ -36,7 +36,8 @@ class DataGenerator:
         """Initialise les répertoires et la graine aléatoire."""
         random.seed(self.seed)
         ensure_dir(self.data_dir)
-        ensure_dir(self.data_dir / "source_ehr_csv")
+        # ensure_dir(self.data_dir / "source_ehr_csv")
+        ensure_dir(self.data_dir / "source_mimic_csv")
         ensure_dir(self.data_dir / "source_lab_json")
         ensure_dir(self.data_dir / "source_fhir_ndjson")
         ensure_dir(self.data_dir / "source_dicom")

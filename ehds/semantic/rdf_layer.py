@@ -194,7 +194,7 @@ class RDFLayer:
         # Drugs + prescriptions
         for _, r in prescriptions.iterrows():
             p = self.RES[f"patient/{r['patient_id_pseudo']}"]
-            # URL-encode drug name to handle special characters (parentheses, brackets, slashes, etc.)
+            # URL-encode drug name to handle special characters (e.g., {, }, (, ), /, +, [, ])
             drug_name_encoded = quote(str(r['drug']), safe='')
             drug_uri = self.RES[f"drug/{drug_name_encoded}"]
             self.g.add((drug_uri, RDF.type, EHDS.Drug))
