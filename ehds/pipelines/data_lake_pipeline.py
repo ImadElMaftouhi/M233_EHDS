@@ -99,11 +99,16 @@ def run_data_lake_pipeline(data_dir: Path = Path("data"), n_patients: int = 120,
     integrator = DataIntegrator(data_dir=data_dir)
     unified_tables = integrator.integrate()
 
-    # Sauvegarder en Gold
+    # Sauvegarder en Gold (Parquet - format principal)
     gold_path = lake.gold / "ehds_unified.parquet"
     ensure_dir(gold_path.parent)
     patients_gold = unified_tables["patients"]
     patients_gold.to_parquet(gold_path, index=False)
+
+    # Export SQLite (couche de visualisation/requêtes SQL - optionnel)
+    sqlite_path = data_dir / "integrated" / "ehds.db"
+    integrator.export_to_sqlite(unified_tables, db_path=sqlite_path)
+    print(f"✓ SQLite export (dashboard compatibility): {sqlite_path}")
 
     # Enregistrer Gold dans le catalogue
     from datetime import datetime
