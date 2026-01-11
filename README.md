@@ -101,20 +101,42 @@ The pipeline works with both **auto-generated simulated data** and **real extern
 
 ### Using Real External Data
 
-To use real data instead of simulated data:
+#### Synthea FHIR Setup
 
-1.  **Synthea FHIR**: Generate data using [Synthea](https://github.com/synthetichealth/synthea), then copy the generated JSON files to:
-    ```
-    data/bronze/fhir/
+**Prerequisites**: Java 11, Git
+
+1.  **Clone and run Synthea** (outside this repository):
+    ```bash
+    git clone https://github.com/synthetichealth/synthea.git
+    cd synthea
+    ./gradlew build check test
+    ./run_synthea -p 100 --exporter.fhir.export=true --exporter.fhir.bulk_data=true
     ```
 
-2.  **MIMIC-III**: Download the dataset from [PhysioNet](https://physionet.org/content/mimiciii/) (requires credentialed access) or from Kaggle, then copy the required CSV files to:
+2.  **Merge NDJSON files into a single bundle**:
+    ```powershell
+    # PowerShell (Windows)
+    Get-Content .\output\fhir\*.ndjson | Set-Content .\output\fhir\bundle.ndjson
     ```
-    data/bronze/mimic/
-    ├── patients.csv
-    ├── admissions.csv
-    └── labevents.csv
+    ```bash
+    # Bash (Linux/Mac)
+    cat output/fhir/*.ndjson > output/fhir/bundle.ndjson
     ```
+
+3.  **Copy to project**:
+    ```
+    data/source_fhir_ndjson/bundle.ndjson
+    ```
+
+#### MIMIC-III Setup
+
+Download from [PhysioNet](https://physionet.org/content/mimiciii/) (requires credentialed access) or Kaggle, then copy:
+```
+data/bronze/mimic/
+├── patients.csv
+├── admissions.csv
+└── labevents.csv
+```
 
 ## �📂 Project Structure
 
