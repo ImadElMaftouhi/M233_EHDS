@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from rdflib import Literal, URIRef
-from rdflib.namespace import RDF
+from rdflib.namespace import RDF, XSD
 
 from ..data import DataGenerator, DataIntegrator
 from ..semantic import CATALOG, PROV_O, SemanticDataLake
@@ -109,14 +109,101 @@ class SyntheaFHIRFlow(IntegrationFlow):
         return path
 
     def transform_silver(self, bronze_uri: URIRef) -> URIRef:
-        """Silver: Pseudonymisation, normalisation dates ISO, terminologies LOINC, flags qualité."""
-        enrichment_rules = {
-            "pseudonymize": "patient_id",
-            "normalize_dates": True,
-            "map_terminologies": {"loinc": True, "icd10": True},
-            "quality_checks": True,
-        }
-        return self.lake.enrich_to_silver(bronze_uri, enrichment_rules)
+        """
+        Silver: Pseudonymisation, normalisation dates ISO, terminologies LOINC, flags qualité.
+        
+        Note: NDJSON FHIR ne peut pas être directement converti en Parquet car il contient
+        des structures imbriquées. On utilise DataIntegrator pour extraire les données structurées.
+        """
+        from datetime import datetime
+        from rdflib import Literal
+        from rdflib.namespace import RDF
+        
+        # Utiliser DataIntegrator pour charger et transformer les données FHIR
+        integrator = DataIntegrator(data_dir=self.lake.data_dir)
+        fhir_data = integrator.load_fhir_ndjson()
+        
+        # Créer un DataFrame unifié à partir des données FHIR extraites
+        import pandas as pd
+        
+        silver_records = []
+        
+        # Patients
+        if not fhir_data["fhir_patients"].empty:
+            for _, row in fhir_data["fhir_patients"].iterrows():
+                silver_records.append({
+                    "patient_id": row.get("patient_id", ""),
+                    "patient_id_pseudo": row.get("patient_id_pseudo", ""),
+                    "gender": row.get("gender_fhir", ""),
+                    "resource_type": "Patient",
+                })
+        
+        # Conditions
+        if not fhir_data["conditions"].empty:
+            for _, row in fhir_data["conditions"].iterrows():
+                silver_records.append({
+                    "patient_id": row.get("patient_id", ""),
+                    "patient_id_pseudo": row.get("patient_id_pseudo", ""),
+                    "icd10_code": row.get("icd10_code", ""),
+                    "resource_type": "Condition",
+                })
+        
+        # Allergies
+        if not fhir_data["allergies"].empty:
+            for _, row in fhir_data["allergies"].iterrows():
+                silver_records.append({
+                    "patient_id": row.get("patient_id", ""),
+                    "patient_id_pseudo": row.get("patient_id_pseudo", ""),
+                    "allergy": row.get("allergy", ""),
+                    "resource_type": "AllergyIntolerance",
+                })
+        
+        # Prescriptions
+        if not fhir_data["prescriptions"].empty:
+            for _, row in fhir_data["prescriptions"].iterrows():
+                silver_records.append({
+                    "patient_id": row.get("patient_id", ""),
+                    "patient_id_pseudo": row.get("patient_id_pseudo", ""),
+                    "drug": row.get("drug", ""),
+                    "date": row.get("date", ""),
+                    "resource_type": "MedicationRequest",
+                })
+        
+        if not silver_records:
+            # Fallback: retourner l'URI bronze si aucune donnée
+            return bronze_uri
+        
+        # Créer DataFrame et sauvegarder en Silver
+        df = pd.DataFrame(silver_records)
+        
+        # Ajouter tags sémantiques si nécessaire
+        if "icd10_code" in df.columns:
+            from ..utils import ICD10
+            df["icd10_label"] = df["icd10_code"].map(ICD10).fillna("Unknown ICD-10")
+        
+        # Sauvegarder en Parquet
+        silver_domain_dir = self.lake.silver / "synthea_fhir"
+        ensure_dir(silver_domain_dir)
+        silver_path = silver_domain_dir / f"synthea_fhir_enriched_{datetime.now().strftime('%Y%m%d')}.parquet"
+        df.to_parquet(silver_path, index=False, engine="pyarrow")
+        
+        # Enregistrer dans le catalogue
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        silver_uri = CATALOG[f"dataset/synthea_fhir_silver_{timestamp}"]
+        self.lake.catalog.add((silver_uri, RDF.type, CATALOG.Dataset))
+        self.lake.catalog.add((silver_uri, CATALOG.zone, Literal("silver")))
+        self.lake.catalog.add((silver_uri, CATALOG.domain, Literal("synthea_fhir")))
+        self.lake.catalog.add((silver_uri, CATALOG.location, Literal(str(silver_path))))
+        self.lake.catalog.add((silver_uri, PROV_O.wasDerivedFrom, bronze_uri))
+        self.lake.catalog.add((silver_uri, CATALOG["format"], Literal("parquet")))
+        
+        # Métadonnées qualité
+        completeness = float((df.notnull().sum() / len(df) * 100).mean()) if len(df) > 0 else 0.0
+        self.lake.catalog.add((silver_uri, CATALOG.completeness, Literal(completeness, datatype=XSD.float)))
+        self.lake.catalog.add((silver_uri, CATALOG.rowCount, Literal(len(df), datatype=XSD.integer)))
+        
+        print(f"✓ Enriched to Silver → {silver_path} ({len(df)} rows, {completeness:.1f}% completeness)")
+        return silver_uri
 
     def transform_gold(self, silver_uris: List[URIRef]) -> URIRef:
         """Gold: Jointure Patient+Observation, schéma unifié."""

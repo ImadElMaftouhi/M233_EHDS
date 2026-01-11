@@ -36,11 +36,111 @@ class DataIntegrator:
         return float(value), unit
 
     def load_ehr_csv(self) -> pd.DataFrame:
-        """Charge les données EHR depuis un fichier CSV."""
+        """
+        Charge les données EHR depuis un fichier CSV (généré).
+        
+        NOTE: Cette méthode est conservée pour usage futur mais n'est plus utilisée
+        automatiquement. Utilisez load_mimic_patients_csv() pour les données MIMIC-III.
+        """
         path = self.data_dir / "source_ehr_csv" / "ehr_patients.csv"
+        if not path.exists():
+            return pd.DataFrame(columns=["patient_id", "patient_id_pseudo", "first_name", "last_name", "gender", "birthDate", "country"])
         df = pd.read_csv(path)
-        df["patient_id_pseudo"] = df["patient_id"].apply(sha256_pseudo)
+        if "patient_id" in df.columns:
+            df["patient_id_pseudo"] = df["patient_id"].apply(sha256_pseudo)
         return df
+
+    def load_mimic_patients_csv(self) -> pd.DataFrame:
+        """
+        Charge les données patients depuis MIMIC-III PATIENTS.csv.
+        
+        MIMIC-III PATIENTS.csv contient:
+        - SUBJECT_ID: identifiant patient
+        - GENDER: genre (M/F)
+        - DOB: date de naissance
+        - DOD: date de décès (optionnel)
+        """
+        mimic_source = self.data_dir / "source_mimic_csv"
+        if not mimic_source.exists():
+            return pd.DataFrame(columns=["patient_id", "patient_id_pseudo", "gender", "birthDate", "country"])
+        
+        # Find PATIENTS.CSV (case insensitive)
+        patients_file = None
+        for f in mimic_source.glob("*.csv"):
+            if f.name.upper() == "PATIENTS.CSV":
+                patients_file = f
+                break
+        
+        if patients_file is None:
+            return pd.DataFrame(columns=["patient_id", "patient_id_pseudo", "gender", "birthDate", "country"])
+        
+        try:
+            # MIMIC-III CSV files may have encoding issues, try multiple encodings
+            encodings = ["utf-8", "latin-1", "cp1252"]
+            df = None
+            for encoding in encodings:
+                try:
+                    df = pd.read_csv(patients_file, encoding=encoding, low_memory=False)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if df is None:
+                # Last resort: use replace strategy
+                df = pd.read_csv(patients_file, encoding="utf-8", errors="replace", low_memory=False)
+            
+            # Map MIMIC-III columns to our schema
+            # SUBJECT_ID -> patient_id
+            if "SUBJECT_ID" in df.columns:
+                df = df.rename(columns={"SUBJECT_ID": "patient_id"})
+            elif "subject_id" in df.columns:
+                df = df.rename(columns={"subject_id": "patient_id"})
+            else:
+                # Use first column as fallback
+                first_col = df.columns[0]
+                df = df.rename(columns={first_col: "patient_id"})
+            
+            # Ensure patient_id is string
+            df["patient_id"] = df["patient_id"].astype(str)
+            
+            # GENDER -> gender (normalize to lowercase: M->male, F->female)
+            if "GENDER" in df.columns:
+                df["gender"] = df["GENDER"].map({"M": "male", "F": "female", "m": "male", "f": "female"}).fillna(df["GENDER"].str.lower())
+            elif "gender" in df.columns:
+                df["gender"] = df["gender"].map({"M": "male", "F": "female", "m": "male", "f": "female"}).fillna(df["gender"].str.lower())
+            else:
+                df["gender"] = None
+            
+            # DOB -> birthDate
+            if "DOB" in df.columns:
+                df["birthDate"] = pd.to_datetime(df["DOB"], errors="coerce").dt.date
+            elif "dob" in df.columns:
+                df["birthDate"] = pd.to_datetime(df["dob"], errors="coerce").dt.date
+            else:
+                df["birthDate"] = None
+            
+            # Add missing columns for compatibility
+            if "first_name" not in df.columns:
+                df["first_name"] = None
+            if "last_name" not in df.columns:
+                df["last_name"] = None
+            if "country" not in df.columns:
+                df["country"] = "US"  # MIMIC-III is from US hospitals
+            
+            # Pseudonymize
+            df["patient_id_pseudo"] = df["patient_id"].apply(sha256_pseudo)
+            
+            # Select and reorder columns for consistency
+            columns_order = ["patient_id", "patient_id_pseudo", "first_name", "last_name", "gender", "birthDate", "country"]
+            available_columns = [c for c in columns_order if c in df.columns]
+            df = df[available_columns]
+            
+            print(f"✓ Loaded {len(df)} MIMIC-III patients from {patients_file}")
+            return df
+            
+        except Exception as e:
+            print(f"[WARNING] Error loading MIMIC-III patients: {e}")
+            return pd.DataFrame(columns=["patient_id", "patient_id_pseudo", "gender", "birthDate", "country"])
 
     def load_lab_json(self) -> pd.DataFrame:
         """Charge les résultats de laboratoire depuis un fichier JSON."""
@@ -228,20 +328,43 @@ class DataIntegrator:
         return df
 
     def integrate(self) -> Dict[str, pd.DataFrame]:
-        """Intègre toutes les sources de données en un schéma unifié."""
-        ehr = self.load_ehr_csv()
+        """
+        Intègre toutes les sources de données en un schéma unifié.
+        
+        Utilise MIMIC-III comme source principale de données patients.
+        L'EHR généré (load_ehr_csv) est conservé mais non utilisé automatiquement.
+        """
+        # Try MIMIC-III first, fallback to EHR if not available
+        mimic_patients = self.load_mimic_patients_csv()
+        if mimic_patients.empty or len(mimic_patients) == 0:
+            print("[INFO] MIMIC-III patients not found, trying EHR CSV...")
+            ehr = self.load_ehr_csv()
+            patients = ehr.copy()
+        else:
+            patients = mimic_patients.copy()
+        
         lab = self.load_lab_json()
         fhir = self.load_fhir_ndjson()
         dicom_images = self.load_dicom_metadata()
 
-        # Unifier la table des patients
-        patients = ehr.merge(
-            fhir["fhir_patients"][["patient_id", "gender_fhir"]] if not fhir["fhir_patients"].empty else ehr[["patient_id"]],
-            on="patient_id",
-            how="left",
-        )
-        patients["gender_unified"] = patients["gender_fhir"].fillna(patients["gender"])
-        patients = patients.drop(columns=[c for c in ["gender_fhir"] if c in patients.columns])
+        # Unifier la table des patients avec données FHIR si disponibles
+        if not fhir["fhir_patients"].empty and "patient_id" in patients.columns:
+            # Merge FHIR gender data if available
+            fhir_patients_subset = fhir["fhir_patients"][["patient_id", "gender_fhir"]].copy()
+            patients = patients.merge(
+                fhir_patients_subset,
+                on="patient_id",
+                how="left",
+            )
+            # Use FHIR gender if available, otherwise use existing gender
+            if "gender_fhir" in patients.columns:
+                patients["gender_unified"] = patients["gender_fhir"].fillna(patients.get("gender", ""))
+                patients = patients.drop(columns=["gender_fhir"])
+            else:
+                patients["gender_unified"] = patients.get("gender", "")
+        else:
+            # No FHIR data, use existing gender
+            patients["gender_unified"] = patients.get("gender", "")
 
         # Conditions -> ajouter label depuis dictionnaire ICD-10
         conditions = fhir["conditions"].copy()

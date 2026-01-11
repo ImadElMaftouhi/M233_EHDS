@@ -39,11 +39,11 @@ def run_data_lake_pipeline(data_dir: Path = Path("data"), n_patients: int = 120,
     print("\n[3/5] Ingestion dans Bronze (Raw Zone)...")
     bronze_uris = []
 
-    # EHR CSV
-    ehr_source = data_dir / "source_ehr_csv" / "ehr_patients.csv"
-    if ehr_source.exists():
-        ehr_bronze = lake.ingest_raw("ehr_patients", ehr_source, domain="ehr", format_type="csv")
-        bronze_uris.append(ehr_bronze)
+    # MIMIC-III CSV (external data - must be manually copied to source_mimic_csv/)
+    mimic_source = data_dir / "source_mimic_csv"
+    if mimic_source.exists() and list(mimic_source.glob("*.csv")):
+        mimic_bronze = lake.ingest_raw("mimic_patients", mimic_source / "PATIENTS.CSV", domain="mimic", format_type="csv")
+        bronze_uris.append(mimic_bronze)
 
     # Lab JSON
     lab_source = data_dir / "source_lab_json" / "lab_results.json"
@@ -122,7 +122,7 @@ def run_data_lake_pipeline(data_dir: Path = Path("data"), n_patients: int = 120,
     # Utiliser RDFLayer pour transformer en RDF
     rdf_layer = RDFLayer(data_dir=data_dir)
     rdf_layer.build_graph(
-        patients=unified_tables.get("patients", integrator.load_ehr_csv()),
+        patients=unified_tables.get("patients"),
         lab_results=unified_tables.get("lab_results", integrator.load_lab_json()),
         conditions=unified_tables.get("conditions"),
         allergies=unified_tables.get("allergies"),

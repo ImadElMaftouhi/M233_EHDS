@@ -296,11 +296,47 @@ elif page == "Data Sources":
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.markdown("**Source 1 — EHR (CSV)**")
-        p = DATA_DIR / "source_ehr_csv" / "ehr_patients.csv"
-        st.write(str(p))
-        if p.exists():
-            st.dataframe(pd.read_csv(p).head(15))
+        st.markdown("**Source 1 — MIMIC-III (CSV)**")
+        mimic_dir = DATA_DIR / "source_mimic_csv"
+        st.write(str(mimic_dir))
+        if mimic_dir.exists():
+            # Find PATIENTS.CSV (case insensitive)
+            patients_file = None
+            for f in mimic_dir.glob("*.csv"):
+                if f.name.upper() == "PATIENTS.CSV":
+                    patients_file = f
+                    break
+            
+            if patients_file:
+                try:
+                    # Try multiple encodings
+                    encodings = ["utf-8", "latin-1", "cp1252"]
+                    df = None
+                    for encoding in encodings:
+                        try:
+                            df = pd.read_csv(patients_file, encoding=encoding, low_memory=False, nrows=15)
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                    if df is None:
+                        df = pd.read_csv(patients_file, encoding="utf-8", errors="replace", low_memory=False, nrows=15)
+                    
+                    # Show key columns
+                    key_cols = ["SUBJECT_ID", "GENDER", "DOB"] if "SUBJECT_ID" in df.columns else df.columns[:5]
+                    display_cols = [c for c in key_cols if c in df.columns]
+                    if display_cols:
+                        st.dataframe(df[display_cols])
+                    else:
+                        st.dataframe(df.head(15))
+                except Exception as e:
+                    st.error(f"Error reading MIMIC-III: {e}")
+            else:
+                st.info("PATIENTS.CSV not found. Please copy MIMIC-III CSV files to data/source_mimic_csv/")
+        else:
+            st.info("MIMIC-III directory not found. Please copy MIMIC-III CSV files to data/source_mimic_csv/")
+        
+        st.markdown("---")
+        st.markdown("**Note:** EHR generator (source_ehr_csv) is available but not used automatically.")
 
     with col2:
         st.markdown("**Source 2 — Labs (JSON)**")
