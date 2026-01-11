@@ -69,16 +69,55 @@ class DataIntegrator:
         path = self.data_dir / "bronze" / "fhir" / "bundle.ndjson"
         if not path.exists():
             path = self.data_dir / "source_fhir_ndjson" / "bundle.ndjson"
-        
+
         patients, conds, alls, meds = [], [], [], []
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
+
+        # Try reading the whole file as binary and decode with multiple encoding fallbacks
+        encodings = ["utf-8", "latin-1", "cp1252", "iso-8859-1"]
+        skipped_lines = 0
+        total_lines = 0
+        
+        with open(path, "rb") as f:
+            lineno = 0
+            for rawline in f:
+                lineno += 1
+                total_lines += 1
+                line = None
+                
+                # Try multiple encodings
+                for encoding in encodings:
+                    try:
+                        line = rawline.decode(encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                
+                # If all encodings failed, try with error handling
+                if line is None:
+                    try:
+                        # Use 'replace' to replace invalid bytes with replacement character
+                        line = rawline.decode("utf-8", errors="replace")
+                        if skipped_lines == 0:  # Only warn once
+                            print(f"[WARNING] Some lines in {path} contain invalid UTF-8 bytes. Using replacement characters ().")
+                    except Exception as e:
+                        skipped_lines += 1
+                        if skipped_lines <= 5:
+                            print(f"[WARNING] Could not decode line {lineno} of {path}: {e}. Skipping line.")
+                        continue
+                
                 if not line.strip():
                     continue
-                obj = json.loads(line)
+                    
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError as e:
+                    skipped_lines += 1
+                    if skipped_lines <= 5:
+                        print(f"[WARNING] JSON decoding error in line {lineno} of {path}: {e}. Skipping line.")
+                    continue
                 rt = obj.get("resourceType")
                 if rt == "Patient":
-                    pid = obj["id"]
+                    pid = obj.get("id")
                     patients.append(
                         {
                             "patient_id": pid,
@@ -86,21 +125,48 @@ class DataIntegrator:
                         }
                     )
                 elif rt == "Condition":
-                    pid = obj["subject"]["reference"].split("/")[-1]
-                    code = obj["code"]["coding"][0]["code"]
-                    conds.append({"patient_id": pid, "icd10_code": code})
+                    try:
+                        pid = obj.get("subject", {}).get("reference", "").split("/")[-1]
+                        coding = obj.get("code", {}).get("coding", [{}])
+                        code = coding[0].get("code", "") if coding else ""
+                        if pid and code:
+                            conds.append({"patient_id": pid, "icd10_code": code})
+                    except (KeyError, IndexError, AttributeError, TypeError):
+                        pass
                 elif rt == "AllergyIntolerance":
-                    pid = obj["patient"]["reference"].split("/")[-1]
-                    alls.append({"patient_id": pid, "allergy": obj["code"]["text"]})
+                    try:
+                        pid = obj.get("patient", {}).get("reference", "").split("/")[-1]
+                        allergy = obj.get("code", {}).get("text", "") or obj.get("code", {}).get("coding", [{}])[0].get("display", "")
+                        if pid and allergy:
+                            alls.append({"patient_id": pid, "allergy": allergy})
+                    except (KeyError, IndexError, AttributeError, TypeError):
+                        pass
                 elif rt == "MedicationRequest":
-                    pid = obj["subject"]["reference"].split("/")[-1]
-                    meds.append(
-                        {
-                            "patient_id": pid,
-                            "drug": obj["medicationCodeableConcept"]["text"],
-                            "date": obj.get("authoredOn"),
-                        }
-                    )
+                    try:
+                        pid = obj.get("subject", {}).get("reference", "").split("/")[-1]
+                        # Try different locations for medication info
+                        drug = (
+                            obj.get("medicationCodeableConcept", {}).get("text", "")
+                            or obj.get("medicationCodeableConcept", {}).get("coding", [{}])[0].get("display", "")
+                            or obj.get("medicationReference", {}).get("display", "")
+                            or "Unknown"
+                        )
+                        if pid:
+                            meds.append(
+                                {
+                                    "patient_id": pid,
+                                    "drug": drug,
+                                    "date": obj.get("authoredOn"),
+                                }
+                            )
+                    except (KeyError, IndexError, AttributeError, TypeError):
+                        pass
+        
+        # Report summary
+        if skipped_lines > 0:
+            print(f"[INFO] Processed {total_lines} lines, skipped {skipped_lines} lines with errors.")
+        else:
+            print(f"[INFO] Successfully processed {total_lines} lines from {path}")
 
         out = {
             "fhir_patients": pd.DataFrame(patients),
