@@ -178,24 +178,38 @@ class MIMICIIIFlow(IntegrationFlow):
         self.mimic_dir = mimic_dir or lake.data_dir / "bronze" / "mimic"
 
     def extract(self) -> Path:
-        """Extract: Utilise données MIMIC-III existantes dans data/bronze/mimic/."""
-        mimic_bronze = self.lake.data_dir / "bronze" / "mimic"
-        if not mimic_bronze.exists():
+        """
+        Extract: Utilise les données MIMIC-III existantes dans data/source_mimic_csv/.
+
+        Quatre fichiers CSV doivent être présents (copiés manuellement) :
+        - ADMISSIONS.csv
+        - LABEVENTS.csv
+        - PATIENTS.csv
+        - PRESCRIPTIONS.csv
+        """
+        mimic_source = self.lake.data_dir / "source_mimic_csv"
+        if not mimic_source.exists():
             raise FileNotFoundError(
-                f"MIMIC-III data directory not found at {mimic_bronze}. "
-                "Please copy MIMIC-III CSV files (patients.csv, admissions.csv, labevents.csv) to data/bronze/mimic/"
+                f"MIMIC-III data directory not found at {mimic_source}. "
+                "Please copy the following CSV files (ADMISSIONS.csv, LABEVENTS.csv, PATIENTS.csv, PRESCRIPTIONS.csv) to data/source_mimic_csv/"
             )
 
-        required_files_lower = ["patients.csv", "admissions.csv", "labevents.csv"]
-        actual_files = {f.name.lower(): f for f in mimic_bronze.glob("*.csv") if f.is_file()}
-        missing = [f for f in required_files_lower if f not in actual_files]
+        required_files = [
+            "ADMISSIONS.CSV",
+            "LABEVENTS.CSV",
+            "PATIENTS.CSV",
+            "PRESCRIPTIONS.CSV",
+        ]
+        actual_files = {f.name.upper(): f for f in mimic_source.glob("*.csv") if f.is_file()}
+        missing = [f for f in required_files if f not in actual_files]
         if missing:
             raise FileNotFoundError(
-                f"Missing MIMIC-III files in {mimic_bronze}: {', '.join(missing)}. "
+                f"Missing MIMIC-III files in {mimic_source}: {', '.join(missing)}. "
                 f"Found files: {list(actual_files.keys())}"
             )
 
-        return actual_files["patients.csv"]
+        # On retourne le chemin de PATIENTS.csv (par convention, peut être utilisé dans la suite du pipeline)
+        return actual_files["PATIENTS.CSV"]
 
     def transform_silver(self, bronze_uri: URIRef) -> URIRef:
         """Silver: Nettoyage, pseudonymisation subject_id, mapping LOINC/ICD-10, normalisation unités."""
