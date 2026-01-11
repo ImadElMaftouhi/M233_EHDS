@@ -21,6 +21,7 @@ page = st.sidebar.radio(
     "Select View",
     [
         "Overview",
+        "Data Lake Zones",
         "Data Sources",
         "Integrated DB",
         "Integration Pipeline",
@@ -118,6 +119,177 @@ if page == "Overview":
         "- **Semantic layer**: RDF graph + SKOS concept schemes + SPARQL queries\n"
         "- **Course scenario**: unit conversion + allergy↔prescription contraindication\n"
     )
+
+elif page == "Data Lake Zones":
+    st.header("🏞️ Semantic Data Lake Architecture")
+    st.markdown("**Architecture hybride: Bronze (Raw) → Silver (Enriched) → Gold (Curated) + Semantic Layer**")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.subheader("🔷 Bronze Zone (Raw)")
+        bronze_dir = DATA_DIR / "bronze"
+        if bronze_dir.exists():
+            bronze_files = list(bronze_dir.rglob("*"))
+            bronze_files = [f for f in bronze_files if f.is_file()]
+            st.metric("Raw Files", len(bronze_files))
+            
+            st.markdown("**Domains:**")
+            for domain_dir in sorted(bronze_dir.iterdir()):
+                if domain_dir.is_dir():
+                    domain_files = list(domain_dir.rglob("*"))
+                    domain_files = [f for f in domain_files if f.is_file()]
+                    st.write(f"  - **{domain_dir.name}**: {len(domain_files)} files")
+        else:
+            st.warning("Bronze zone not found. Run pipeline first.")
+    
+    with col2:
+        st.subheader("🔶 Silver Zone (Enriched)")
+        silver_dir = DATA_DIR / "silver"
+        if silver_dir.exists():
+            silver_files = list(silver_dir.rglob("*.parquet"))
+            st.metric("Parquet Datasets", len(silver_files))
+            
+            if silver_files:
+                st.markdown("**Datasets:**")
+                for parquet_file in sorted(silver_files)[:5]:  # Show first 5
+                    try:
+                        size_mb = parquet_file.stat().st_size / (1024 * 1024)
+                        df_info = pd.read_parquet(parquet_file, engine="pyarrow")
+                        st.write(f"  - **{parquet_file.name}**")
+                        st.write(f"    Size: {size_mb:.2f} MB | Rows: {len(df_info):,}")
+                    except Exception:
+                        st.write(f"  - {parquet_file.name}")
+        else:
+            st.info("Silver zone not created yet.")
+    
+    with col3:
+        st.subheader("🔶 Gold Zone (Curated)")
+        gold_dir = DATA_DIR / "gold"
+        if gold_dir.exists():
+            gold_files = list(gold_dir.rglob("*.parquet"))
+            st.metric("Unified Datasets", len(gold_files))
+            
+            if gold_files:
+                for gold_file in sorted(gold_files):
+                    try:
+                        size_mb = gold_file.stat().st_size / (1024 * 1024)
+                        df = pd.read_parquet(gold_file, engine="pyarrow")
+                        st.write(f"**{gold_file.name}**")
+                        st.write(f"  - Size: {size_mb:.2f} MB")
+                        st.write(f"  - Rows: {len(df):,}")
+                        st.write(f"  - Columns: {len(df.columns)}")
+                    except Exception as e:
+                        st.write(f"  - {gold_file.name} (error reading)")
+        else:
+            st.info("Gold zone not created yet.")
+    
+    st.divider()
+    
+    st.subheader("📚 Semantic Layer")
+    semantic_dir = DATA_DIR / "semantic"
+    
+    col_s1, col_s2 = st.columns(2)
+    
+    with col_s1:
+        st.markdown("**Semantic Catalog**")
+        catalog_path = semantic_dir / "catalog.ttl"
+        if catalog_path.exists():
+            try:
+                from rdflib import Graph
+                catalog_g = Graph()
+                catalog_g.parse(str(catalog_path), format="turtle")
+                
+                # Query catalog
+                query = """
+                PREFIX catalog: <http://ehds.eu/catalog#>
+                PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                SELECT ?dataset ?zone ?format ?rows
+                WHERE {
+                    ?dataset rdf:type catalog:Dataset ;
+                             catalog:zone ?zone ;
+                             catalog:format ?format .
+                    OPTIONAL { ?dataset catalog:rowCount ?rows }
+                }
+                ORDER BY ?zone ?dataset
+                """
+                query_result = catalog_g.query(query)
+                var_names = [str(v) for v in query_result.vars] if query_result.vars else []
+                results_list = list(query_result)
+                
+                if results_list:
+                    # Convert SPARQL results - access by index (like in ehds_integration.py)
+                    rows = []
+                    for row in results_list:
+                        row_dict = {}
+                        for i, var_name in enumerate(var_names):
+                            try:
+                                value = row[i] if i < len(row) else None
+                                row_dict[var_name] = str(value) if value is not None else None
+                            except (IndexError, TypeError, AttributeError):
+                                row_dict[var_name] = None
+                        rows.append(row_dict)
+                    
+                    if rows:
+                        catalog_df = pd.DataFrame(rows)
+                        st.dataframe(catalog_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No catalog entries to display.")
+                else:
+                    st.info("No catalog entries found.")
+            except Exception as e:
+                st.error(f"Error querying catalog: {e}")
+                st.code(str(e))
+        else:
+            st.warning("Semantic catalog not found.")
+    
+    with col_s2:
+        st.markdown("**Data Graph RDF**")
+        graph_path = semantic_dir / "ehds_data_graph.ttl"
+        if graph_path.exists():
+            try:
+                from rdflib import Graph
+                g = Graph()
+                g.parse(str(graph_path), format="turtle")
+                st.metric("RDF Triples", len(g))
+                
+                # Count by type
+                query = """
+                PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                PREFIX ehds: <http://ehds.eu/ontology#>
+                SELECT ?type (COUNT(?instance) AS ?count)
+                WHERE {
+                    ?instance rdf:type ?type .
+                    FILTER (STRSTARTS(STR(?type), "http://ehds.eu/ontology#"))
+                }
+                GROUP BY ?type
+                ORDER BY DESC(?count)
+                LIMIT 10
+                """
+                query_result = g.query(query)
+                var_names = [str(v) for v in query_result.vars] if query_result.vars else []
+                results_list = [list(r) for r in query_result]
+                if results_list:
+                    # Convert SPARQL results - same approach as SPARQL Queries page
+                    if var_names:
+                        types_df = pd.DataFrame(results_list, columns=var_names)
+                    else:
+                        # Fallback if vars not available
+                        types_df = pd.DataFrame(results_list, columns=[f"col{i}" for i in range(len(results_list[0]) if results_list else 0)])
+                    
+                    if not types_df.empty:
+                        # Convert all values to strings for display
+                        types_df = types_df.astype(str)
+                        st.dataframe(types_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No graph data to display.")
+                else:
+                    st.info("No graph data found.")
+            except Exception as e:
+                st.error(f"Error querying graph: {e}")
+                st.code(str(e))
+        else:
+            st.warning("Data graph not found.")
 
 elif page == "Data Sources":
     st.header("Data Sources (Raw)")
