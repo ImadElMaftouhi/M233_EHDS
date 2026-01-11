@@ -2,7 +2,9 @@ pandas>=1.5.0
 numpy>=1.24.0
 pydicom>=2.4.0
 rdflib>=6.2.0
+pyarrow>=12.0.0
 streamlit>=1.30.0
 plotly>=5.18.0
 tqdm>=4.66.0
 pytest
+# fhir.resources>=7.0.0  # Optionnel pour parsing FHIR complet
