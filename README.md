@@ -87,7 +87,36 @@ The `dashboard.py` script starts an interactive Streamlit dashboard.
 streamlit run dashboard.py
 ```
 
-## 📂 Project Structure
+## Data Sources
+
+The pipeline works with both **auto-generated simulated data** and **real external datasets**.
+
+| Source | Auto-Generated? | Manual Setup Required |
+|--------|:---------------:|----------------------|
+| EHR (CSV) | ✅ Yes | None |
+| Lab Results (JSON) | ✅ Yes | None |
+| FHIR (NDJSON) | ✅ Simulated | Copy real Synthea data for authentic FHIR |
+| DICOM Images | ✅ Simulated | None |
+| MIMIC-III | ❌ No | Download from PhysioNet |
+
+### Using Real External Data
+
+To use real data instead of simulated data:
+
+1.  **Synthea FHIR**: Generate data using [Synthea](https://github.com/synthetichealth/synthea), then copy the generated JSON files to:
+    ```
+    data/bronze/fhir/
+    ```
+
+2.  **MIMIC-III**: Download the dataset from [PhysioNet](https://physionet.org/content/mimiciii/) (requires credentialed access) or from Kaggle, then copy the required CSV files to:
+    ```
+    data/bronze/mimic/
+    ├── patients.csv
+    ├── admissions.csv
+    └── labevents.csv
+    ```
+
+## �📂 Project Structure
 
 ```
 M233_EHDS/
