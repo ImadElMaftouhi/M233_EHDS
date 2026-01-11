@@ -32,10 +32,9 @@ data/gold/
 data/semantic/
 data/integrated/
 data/rdf/
-data/source_dicom/
-data/source_ehr_csv/
+# data/source_dicom/
 data/source_fhir_ndjson/
-data/source_lab_json/
+# data/source_lab_json/
 data/source_mimic_csv/
 
 # But keep directory structure for documentation
