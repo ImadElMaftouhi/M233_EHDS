@@ -105,10 +105,9 @@ def run_data_lake_pipeline(data_dir: Path = Path("data"), n_patients: int = 120,
     patients_gold = unified_tables["patients"]
     patients_gold.to_parquet(gold_path, index=False)
 
-    # Export SQLite (couche de visualisation/requêtes SQL - optionnel)
-    sqlite_path = data_dir / "integrated" / "ehds.db"
-    integrator.export_to_sqlite(unified_tables, db_path=sqlite_path)
-    print(f"✓ SQLite export (dashboard compatibility): {sqlite_path}")
+    # Export to SQLite for dashboard
+    db_path = data_dir / "integrated" / "ehds.db"
+    integrator.export_to_sqlite(unified_tables, db_path)
 
     # Enregistrer Gold dans le catalogue
     from datetime import datetime
@@ -127,7 +126,7 @@ def run_data_lake_pipeline(data_dir: Path = Path("data"), n_patients: int = 120,
     # Utiliser RDFLayer pour transformer en RDF
     rdf_layer = RDFLayer(data_dir=data_dir)
     rdf_layer.build_graph(
-        patients=unified_tables.get("patients"),
+        patients=unified_tables.get("patients", integrator.load_ehr_csv()),
         lab_results=unified_tables.get("lab_results", integrator.load_lab_json()),
         conditions=unified_tables.get("conditions"),
         allergies=unified_tables.get("allergies"),
@@ -141,6 +140,13 @@ def run_data_lake_pipeline(data_dir: Path = Path("data"), n_patients: int = 120,
     # Sauvegarder le catalogue et le graphe
     lake.save_semantic_catalog()
     lake.save_data_graph()
+    
+    # Copy RDF file to expected location for dashboard
+    import shutil
+    rdf_target = data_dir / "rdf" / "ehds_data.ttl"
+    ensure_dir(rdf_target.parent)
+    shutil.copy2(lake.semantic / "ehds_data_graph.ttl", rdf_target)
+    print(f"✓ Copied RDF graph to: {rdf_target}")
 
     # Exécuter quelques requêtes de démonstration
     print("\n    Exécution de requêtes SPARQL de démonstration...")
